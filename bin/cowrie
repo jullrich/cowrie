@@ -1,6 +1,4 @@
 #!/bin/bash
-#Change the below to yes if you are using authbind to listen to port 22
-AUTHBIND_ENABLED=no
 
 # To override the default virtual enviroment, either set COWRIE_VIRTUAL_ENV or
 # activate it before starting Cowrie
@@ -8,6 +6,9 @@ AUTHBIND_ENABLED=no
 
 #Change the below to -n to disable daemonizing (for instance when using supervisor)
 DAEMONIZE=""
+
+# Log to stdout instead of a separate file (same behaviour as Docker)
+# STDOUT="no"
 
 ################################################################################
 ## don't modify below here ##
@@ -74,7 +75,7 @@ cowrie_start() {
     TWISTEDARGS="${DAEMONIZE} ${XARGS} --umask=0022 --pidfile=${PIDFILE}"
 
     # For Docker log to stdout, for non-Docker log to file
-    if [ "$DOCKER" = "yes" ]; then
+    if [ "$STDOUT" = "yes" ]; then
         TWISTEDARGS="${TWISTEDARGS} -l -"
     else
         TWISTEDARGS="${TWISTEDARGS} --logger cowrie.python.logfile.logger"
@@ -97,6 +98,14 @@ cowrie_start() {
         echo 2>&1 "Using default Python virtual environment \"$VIRTUAL_ENV\""
     else
         echo 2>&1 "Not using Python virtual environment"
+    fi
+
+    # Automatically check if the authbind is enabled or not
+    authfile="/etc/authbind/byport/22"
+    if [ -z ${AUTHBIND_ENABLED} ] && [ -x "$authfile" ] && command -v authbind >/dev/null; then
+        AUTHBIND_ENABLED=yes
+    else
+        AUTHBIND_ENABLED=no
     fi
 
     echo "Starting cowrie: [twistd ${TWISTEDARGS} cowrie ${COWRIEARGS}]..."
@@ -178,7 +187,7 @@ for dir in ${COWRIEDIR}/twisted ${COWRIEDIR}/cowrie; do
 done
 
 # Don't store pidfile on Docker persistent volume
-if [ "$DOCKER" = "yes" ]; then
+if [ "$STDOUT" = "yes" ]; then
         PIDFILE=""
 else
         PIDFILE=var/run/cowrie.pid

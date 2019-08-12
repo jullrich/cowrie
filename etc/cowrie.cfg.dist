@@ -114,6 +114,13 @@ authentication_timeout = 120
 # (default: shell)
 backend = shell
 
+# Timezone Cowrie uses for logging
+# This can be any valid timezone for the TZ environment variable
+# The special value `system` will let Cowrie use the system time zone
+# `system` is not recommended because you will need to deal with daylight
+# savings time and other special cases yourself when analysing the logs.
+timezone = UTC
+
 
 # ============================================================================
 # Network Specific Options
@@ -176,14 +183,6 @@ auth_class = UserDB
 #auth_class_parameters = 2, 5, 10
 
 
-# No authentication checking at all
-# enabling 'auth_none' will enable the ssh2 'auth_none' authentication method
-# this allows the requested user in without any verification at all
-#
-# (default: false)
-#auth_none_enabled = false
-
-
 # ============================================================================
 # Historical SSH Specific Options
 # historical options in [honeypot] that have not yet been moved to [ssh]
@@ -192,6 +191,49 @@ auth_class = UserDB
 # Source Port to report in logs (useful if you use iptables to forward ports to Cowrie)
 #reported_ssh_port = 22
 
+# ============================================================================
+# Proxy Options
+# ============================================================================
+[proxy]
+
+backend_ssh_host = localhost
+backend_ssh_port = 2022
+
+backend_telnet_host = localhost
+backend_telnet_port = 2023
+
+backend_user = root
+backend_pass = root
+
+# Telnet Spoofing #
+# To spoof telnet authentication we need to capture login and password prompts, and spoof data to the backend in order
+# to successfully authenticate. If disabled, attackers can only use the real user credentials of the backend.
+
+telnet_spoof_authentication = true
+
+# These regex were made using Ubuntu 18.04; you have to adapt these for the prompts
+# from your backend. You can enable raw logging above to analyse data passing through
+# and identify the format of the prompts you need.
+# You should generally include ".*" at the beginning and end of prompts, since Telnet messages can contain
+# more data than the prompt.
+
+# For login it is usually <hostname> login:
+telnet_username_prompt_regex = (\n|^)46438fdf5ebc login: .*
+
+# Password prompt is usually only the word Password
+telnet_password_prompt_regex = .*Password: .*
+
+# This data is sent by clients at the beginning of negotiation (before the password prompt), and contains the username
+# that is trying to log in. We replace that username with the one in "backend_user" to allow the chance of a successful
+# login after the first password prompt. We are only able to check if credentials are allowed after the password is
+# inserted. If they are, then a correct username was already sent and authentication succeeds; if not, we send a fake
+# password to force authentication to fail.
+telnet_username_in_negotiation_regex = (.*\xff\xfa.*USER\x01)(.*?)(\xff.*)
+
+
+# Other Configs #
+# log raw TCP packets in SSh and Telnet
+log_raw = false
 
 
 # ============================================================================
@@ -299,6 +341,9 @@ kernel_build_string = #1 SMP Debian 3.2.68-1+deb7u1
 hardware_platform = x86_64
 operating_system = GNU/Linux
 
+# SSH Version as printed by "ssh -V" in shell emulation
+ssh_version = OpenSSH_7.9p1, OpenSSL 1.1.1a  20 Nov 2018
+
 
 # ============================================================================
 # SSH Specific Options
@@ -347,22 +392,54 @@ dsa_private_key = ${honeypot:state_path}/ssh_host_dsa_key
 # (default: "SSH-2.0-SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2")
 version = SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2
 
-
-# IP addresses to listen for incoming SSH connections.
-# (DEPRECATED: use listen_endpoints instead)
+# Cipher encryption algorithms to be used.
 #
-# (default: 0.0.0.0) = any IPv4 address
-#listen_addr = 0.0.0.0
-# (use :: for listen to all IPv6 and IPv4 addresses)
-#listen_addr = ::
-
-
-# Port to listen for incoming SSH connections.
-# (DEPRECATED: use listen_endpoints instead)
+# MUST be supplied as a comma-separated string without
+# any spaces or newlines.
 #
-# (default: 2222)
-#listen_port = 2222
+# Use ciphers to limit to more secure algorithms only
+# any spaces.
+# Supported ciphers:
+#
+# aes128-ctr
+# aes192-ctr
+# aes256-ctr
+# aes256-cbc
+# aes192-cbc
+# aes128-cbc
+# 3des-cbc
+# blowfish-cbc
+# cast128-cbc
+ciphers = aes128-ctr,aes192-ctr,aes256-ctr,aes256-cbc,aes192-cbc,aes128-cbc,3des-cbc,blowfish-cbc,cast128-cbc
 
+
+# MAC Algorithm to be used.
+#
+# MUST be supplied as a comma-separated string without
+# any spaces or newlines.
+#
+# hmac-sha1 and hmac-md5 are considered insecure now, and
+# instead MACs with higher number of bits should be used.
+#
+# Supported HMACs:
+# hmac-sha2-512
+# hmac-sha2-384
+# hmac-sha2-256
+# hmac-sha1
+# hmac-md5
+macs = hmac-sha2-512,hmac-sha2-384,hmac-sha2-56,hmac-sha1,hmac-md5
+
+
+# Compression Method to be used.
+#
+# MUST be supplied as a comma-separated string without
+# any spaces or newlines.
+#
+# Supported Compression Methods:
+# zlib@openssh.com
+# zlib
+# none
+compression = zlib@openssh.com,zlib,none
 
 # Endpoint to listen on for incoming SSH connections.
 # See https://twistedmatrix.com/documents/current/core/howto/endpoints.html#servers
@@ -375,7 +452,6 @@ version = SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2
 # use authbind for port numbers under 1024
 
 listen_endpoints = tcp:2222:interface=0.0.0.0
-
 
 # Enable the SFTP subsystem
 # (default: true)
@@ -421,6 +497,17 @@ forward_tunnel = false
 # forward_tunnel_443 = 127.0.0.1:3128
 
 
+# No authentication checking at all
+# enabling 'auth_none' will enable the ssh2 'auth_none' authentication method
+# this allows the requested user in without any verification at all
+#
+# (default: false)
+#auth_none_enabled = false
+
+
+# Configure keyboard-interactive login
+auth_keyboard_interactive_enabled = false
+
 # ============================================================================
 # Telnet Specific Options
 # ============================================================================
@@ -428,22 +515,6 @@ forward_tunnel = false
 
 # Enable Telnet support, disabled by default
 enabled = false
-
-# IP addresses to listen for incoming Telnet connections.
-# (DEPRECATED: use listen_endpoints instead)
-#
-# (default: 0.0.0.0) = any IPv4 address
-#listen_addr = 0.0.0.0
-# (use :: for listen to all IPv6 and IPv4 addresses)
-#listen_addr = ::
-
-
-# Port to listen for incoming Telnet connections.
-# (DEPRECATED: use listen_endpoints instead)
-#
-# (default: 2223)
-#listen_port = 2223
-
 
 # Endpoint to listen on for incoming Telnet connections.
 # See https://twistedmatrix.com/documents/current/core/howto/endpoints.html#servers
@@ -640,6 +711,8 @@ epoch_timestamp = false
 #api_key = 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 #upload = True
 #debug = False
+#scan_file = True
+#scan_url = False
 
 
 # Cuckoo output module
@@ -733,3 +806,21 @@ topic = cowrie
 # Method to use when sending data to redis.
 # Can be one of [lpush, rpush, publish]. Defaults to lpush
 #send_method = lpush
+
+
+# Perform Reverse DNS lookup
+#[output_reversedns]
+#enabled = true
+# Timeout in seconds
+#timeout = 3
+
+#[output_greynoise]
+#enabled = true
+#debug=False
+# Name of the tags separated by comma, for which the IP has to be scanned for.
+# Example "SHODAN,JBOSS_WORM,CPANEL_SCANNER_LOW"
+# If there isn't any specific tag then just leave it "all"
+#tags = all
+# It's optional to have API key, so if you don't want to but
+# API key then leave this option commented
+#api_key = 1234567890

@@ -10,7 +10,7 @@ from twisted.python import components, log
 
 from zope.interface import implementer
 
-from cowrie.core.config import CONFIG
+from cowrie.core.config import CowrieConfig
 from cowrie.shell import filetransfer
 from cowrie.shell import pwd
 from cowrie.shell import session as shellsession
@@ -30,20 +30,21 @@ class CowrieUser(avatar.ConchUser):
 
         try:
             pwentry = pwd.Passwd().getpwnam(self.username)
-            self.uid = pwentry['pw_uid']
-            self.gid = pwentry['pw_gid']
-            self.home = pwentry['pw_dir']
-        except Exception:
-            self.uid = 1001
-            self.gid = 1001
-            self.home = '/home'
+            self.temporary = False
+        except KeyError:
+            pwentry = pwd.Passwd().setpwentry(self.username)
+            self.temporary = True
+
+        self.uid = pwentry['pw_uid']
+        self.gid = pwentry['pw_gid']
+        self.home = pwentry['pw_dir']
 
         # SFTP support enabled only when option is explicitly set
-        if CONFIG.getboolean('ssh', 'sftp_enabled', fallback=False):
+        if CowrieConfig().getboolean('ssh', 'sftp_enabled', fallback=False):
             self.subsystemLookup[b'sftp'] = conchfiletransfer.FileTransferServer
 
         # SSH forwarding disabled only when option is explicitly set
-        if CONFIG.getboolean('ssh', 'forwarding', fallback=True):
+        if CowrieConfig().getboolean('ssh', 'forwarding', fallback=True):
             self.channelLookup[b'direct-tcpip'] = forwarding.cowrieOpenConnectForwardingClient
 
     def logout(self):

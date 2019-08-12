@@ -184,7 +184,7 @@ class command_printf(HoneyPotCommand):
                 if s.endswith('\\c'):
                     s = s[:-2]
 
-                self.write(codecs.escape_devode(s)[0])
+                self.write(codecs.escape_decode(s)[0])
 
 
 commands['/usr/bin/printf'] = command_printf
@@ -458,7 +458,7 @@ class command_ps(HoneyPotCommand):
                 line = [_user, _pid, _cpu, _mem, _vsz, _rss, _tty, _stat, _start, _time, _command]
             s = ''.join([output[i][x] for x in line])
             if 'w' not in args:
-                s = s[:80]
+                s = s[:(int(self.environ['COLUMNS']) if 'COLUMNS' in self.environ else 80)]
             self.write('{0}\n'.format(s))
 
 
@@ -624,7 +624,7 @@ class command_yes(HoneyPotCommand):
 
     def y(self):
         if len(self.args):
-            self.write("{0}{1}".format(' '.join(self.args, '\n')))
+            self.write("{0}\n".format(' '.join(self.args, '\n')))
         else:
             self.write('y\n')
         self.scheduled = reactor.callLater(0.01, self.y)
@@ -652,7 +652,7 @@ class command_sh(HoneyPotCommand):
             self.execute_commands(line)
 
         elif self.input_data:
-            self.execute_commands(self.input_data)
+            self.execute_commands(self.input_data.decode('utf8'))
 
         # TODO: handle spawning multiple shells, support other sh flags
 
@@ -783,6 +783,18 @@ commands['/usr/bin/chattr'] = command_chattr
 commands['chattr'] = command_chattr
 
 
+class command_set(HoneyPotCommand):
+    # Basic functionaltly (show only), need enhancements
+    # This will show ALL environ vars, not only the global ones
+    # With enhancements it should work like env when -o posix is used
+    def call(self):
+        for i in sorted(list(self.environ.keys())):
+            self.write('{0}={1}\n'.format(i, self.environ[i]))
+
+
+commands['set'] = command_set
+
+
 class command_nop(HoneyPotCommand):
 
     def call(self):
@@ -790,7 +802,6 @@ class command_nop(HoneyPotCommand):
 
 
 commands['umask'] = command_nop
-commands['set'] = command_nop
 commands['unset'] = command_nop
 commands['export'] = command_nop
 commands['alias'] = command_nop

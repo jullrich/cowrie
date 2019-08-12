@@ -19,23 +19,19 @@ from twisted.internet import reactor, threads
 from twisted.python import log
 
 import cowrie.core.output
-from cowrie.core.config import CONFIG
+from cowrie.core.config import CowrieConfig
 
 
 class Output(cowrie.core.output.Output):
-
-    def __init__(self):
-        self.auth_key = CONFIG.get('output_dshield', 'auth_key')
-        self.userid = CONFIG.get('output_dshield', 'userid')
-        self.batch_size = CONFIG.getint('output_dshield', 'batch_size')
-        try:
-            self.debug = CONFIG.getboolean('output_dshield', 'debug')
-        except Exception:
-            self.debug = False
-
-        cowrie.core.output.Output.__init__(self)
+    """
+    dshield output
+    """
 
     def start(self):
+        self.auth_key = CowrieConfig().get('output_dshield', 'auth_key')
+        self.userid = CowrieConfig().get('output_dshield', 'userid')
+        self.batch_size = CowrieConfig().getint('output_dshield', 'batch_size')
+        self.debug = CowrieConfig().getboolean('output_dshield', 'debug', fallback=False)
         self.batch = []  # This is used to store login attempts in batches
 
     def stop(self):
@@ -88,7 +84,7 @@ class Output(cowrie.core.output.Output):
         nonce = base64.b64decode(_nonceb64)
         digest = base64.b64encode(
             hmac.new(
-                '{0}{1}'.format(nonce, self.userid),
+                b'{0}{1}'.format(nonce, self.userid),
                 base64.b64decode(self.auth_key),
                 hashlib.sha256).digest()
         )

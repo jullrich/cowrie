@@ -17,7 +17,7 @@ from twisted.protocols.policies import TimeoutMixin
 from twisted.python import failure, log
 
 import cowrie.commands
-from cowrie.core.config import CONFIG
+from cowrie.core.config import CowrieConfig
 from cowrie.shell import command
 from cowrie.shell import honeypot
 
@@ -37,11 +37,11 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
             log.err("Failed to import command {}: {}: {}".format(c, e, ''.join(
                 traceback.format_exception(exc_type, exc_value, exc_traceback))))
 
-    def __init__(self, avatar):
-        self.user = avatar
-        self.environ = avatar.environ
-        self.hostname = avatar.server.hostname
-        self.fs = avatar.server.fs
+    def __init__(self, user):
+        self.user = user
+        self.environ = user.environ
+        self.hostname = user.server.hostname
+        self.fs = user.server.fs
         self.pp = None
         self.logintime = None
         self.realClientIP = None
@@ -49,8 +49,8 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
         self.kippoIP = None
         self.clientIP = None
 
-        if self.fs.exists(avatar.avatar.home):
-            self.cwd = avatar.avatar.home
+        if self.fs.exists(user.avatar.home):
+            self.cwd = user.avatar.home
         else:
             self.cwd = '/'
         self.data = None
@@ -82,21 +82,18 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
 
         log.msg(eventid='cowrie.session.params', arch=self.user.server.arch)
 
-        try:
-            timeout = CONFIG.getint('honeypot', 'interactive_timeout')
-        except Exception:
-            timeout = 180
+        timeout = CowrieConfig().getint('honeypot', 'interactive_timeout', fallback=180)
         self.setTimeout(timeout)
 
         # Source IP of client in user visible reports (can be fake or real)
         try:
-            self.clientIP = CONFIG.get('honeypot', 'fake_addr')
+            self.clientIP = CowrieConfig().get('honeypot', 'fake_addr')
         except Exception:
             self.clientIP = self.realClientIP
 
         # Source IP of server in user visible reports (can be fake or real)
-        if CONFIG.has_option('honeypot', 'internet_facing_ip'):
-            self.kippoIP = CONFIG.get('honeypot', 'internet_facing_ip')
+        if CowrieConfig().has_option('honeypot', 'internet_facing_ip'):
+            self.kippoIP = CowrieConfig().get('honeypot', 'internet_facing_ip')
         else:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -163,7 +160,7 @@ class HoneyPotBaseProtocol(insults.TerminalProtocol, TimeoutMixin):
                     path = i
                     break
 
-        txt = os.path.normpath('{}/txtcmds/{}'.format(CONFIG.get('honeypot', 'share_path'), path))
+        txt = os.path.normpath('{}/txtcmds/{}'.format(CowrieConfig().get('honeypot', 'share_path'), path))
         if os.path.exists(txt) and os.path.isfile(txt):
             return self.txtcmd(txt)
 
@@ -230,7 +227,9 @@ class HoneyPotExecProtocol(HoneyPotBaseProtocol):
         HoneyPotBaseProtocol.connectionMade(self)
         self.setTimeout(60)
         self.cmdstack = [honeypot.HoneyPotShell(self, interactive=False)]
-        self.cmdstack[0].lineReceived(self.execcmd)
+        # TODO: quick and dirty fix to deal with \n separated commands
+        # HoneypotShell() needs a rewrite to better work with pending input
+        self.cmdstack[0].lineReceived("; ".join(self.execcmd.split('\n')))
 
     def keystrokeReceived(self, keyID, modifier):
         self.input_data += keyID

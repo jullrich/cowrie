@@ -15,13 +15,18 @@ from twisted.internet import reactor, ssl
 from twisted.python import compat, log
 from twisted.web import client
 
-from cowrie.core.config import CONFIG
+from cowrie.core.config import CowrieConfig
 from cowrie.shell.command import HoneyPotCommand
 
 commands = {}
 
 
 class command_curl(HoneyPotCommand):
+    """
+    curl command
+    """
+    limit_size = CowrieConfig().getint('honeypot', 'download_limit_size', fallback=0)
+    download_path = CowrieConfig().get('honeypot', 'download_path')
 
     def start(self):
         try:
@@ -75,11 +80,6 @@ class command_curl(HoneyPotCommand):
 
         url = url.encode('ascii')
         self.url = url
-        self.limit_size = 0
-        if CONFIG.has_option('honeypot', 'download_limit_size'):
-            self.limit_size = CONFIG.getint('honeypot', 'download_limit_size')
-
-        self.download_path = CONFIG.get('honeypot', 'download_path')
 
         if not hasattr(self, 'safeoutfile'):
             tmp_fname = '%s_%s_%s_%s' % \
@@ -267,8 +267,8 @@ Options: (H) means HTTP/HTTPS only, (F) means FTP only
         factory = HTTPProgressDownloader(
             self, fakeoutfile, url, outputfile, *args, **kwargs)
         out_addr = None
-        if CONFIG.has_option('honeypot', 'out_addr'):
-            out_addr = (CONFIG.get('honeypot', 'out_addr'), 0)
+        if CowrieConfig().has_option('honeypot', 'out_addr'):
+            out_addr = (CowrieConfig().get('honeypot', 'out_addr'), 0)
 
         if scheme == 'https':
             contextFactory = ssl.ClientContextFactory()
@@ -296,13 +296,15 @@ Options: (H) means HTTP/HTTPS only, (F) means FTP only
         # If we have content already, delete temp file
         if not os.path.exists(hashPath):
             os.rename(self.safeoutfile, hashPath)
+            duplicate = False
         else:
             os.remove(self.safeoutfile)
-            log.msg("Not storing duplicate content " + shasum)
+            duplicate = True
 
         self.protocol.logDispatch(eventid='cowrie.session.file_download',
                                   format='Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s',
                                   url=self.url,
+                                  duplicate=duplicate,
                                   outfile=hashPath,
                                   shasum=shasum,
                                   destfile=self.safeoutfile)
@@ -323,7 +325,8 @@ Options: (H) means HTTP/HTTPS only, (F) means FTP only
 
         if hasattr(error, 'getErrorMessage'):  # Exceptions
             error = error.getErrorMessage()
-        self.write('{0}\n'.format(error))
+        self.write(error)
+        self.write('\n')
         self.protocol.logDispatch(eventid='cowrie.session.file_download.failed',
                                   format='Attempt to download file(s) from URL (%(url)s) failed',
                                   url=self.url)
@@ -416,7 +419,7 @@ class HTTPProgressDownloader(client.HTTPDownloader):
                 self.curl.safeoutfile)
         else:
             with open(self.curl.safeoutfile, 'r') as f:
-                self.curl.write('{0}\n'.format(f.read()))
+                self.curl.write(f.read())
 
         self.curl.fileName = self.fileName
         return client.HTTPDownloader.pageEnd(self)

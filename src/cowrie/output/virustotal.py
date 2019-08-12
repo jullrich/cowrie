@@ -28,11 +28,11 @@
 
 """
 Send SSH logins to Virustotal
-Work in Progress - not functional yet
 """
 
 from __future__ import absolute_import, division
 
+import datetime
 import json
 import os
 
@@ -51,27 +51,30 @@ from twisted.web.iweb import IBodyProducer
 from zope.interface import implementer
 
 import cowrie.core.output
-from cowrie.core.config import CONFIG
+from cowrie.core.config import CowrieConfig
 
 COWRIE_USER_AGENT = 'Cowrie Honeypot'
 VTAPI_URL = 'https://www.virustotal.com/vtapi/v2/'
 COMMENT = "First seen by #Cowrie SSH/telnet Honeypot http://github.com/cowrie/cowrie"
+TIME_SINCE_FIRST_DOWNLOAD = datetime.timedelta(minutes=1)
 
 
 class Output(cowrie.core.output.Output):
-
-    def __init__(self):
-        self.apiKey = CONFIG.get('output_virustotal', 'api_key')
-        self.debug = CONFIG.getboolean('output_virustotal', 'debug', fallback=False)
-        self.upload = CONFIG.getboolean('output_virustotal', 'upload', fallback=True)
-        self.comment = CONFIG.getboolean('output_virustotal', 'comment', fallback=True)
-        self.commenttext = CONFIG.get('output_virustotal', 'commenttext', fallback=COMMENT)
-        cowrie.core.output.Output.__init__(self)
+    """
+    virustotal output
+    """
 
     def start(self):
         """
         Start output plugin
         """
+        self.apiKey = CowrieConfig().get('output_virustotal', 'api_key')
+        self.debug = CowrieConfig().getboolean('output_virustotal', 'debug', fallback=False)
+        self.upload = CowrieConfig().getboolean('output_virustotal', 'upload', fallback=True)
+        self.comment = CowrieConfig().getboolean('output_virustotal', 'comment', fallback=True)
+        self.scan_file = CowrieConfig().getboolean('output_virustotal', 'scan_file', fallback=True)
+        self.scan_url = CowrieConfig().getboolean('output_virustotal', 'scan_url', fallback=False)
+        self.commenttext = CowrieConfig().get('output_virustotal', 'commenttext', fallback=COMMENT)
         self.agent = client.Agent(reactor, WebClientContextFactory())
 
     def stop(self):
@@ -81,15 +84,35 @@ class Output(cowrie.core.output.Output):
         pass
 
     def write(self, entry):
-        if entry["eventid"] == 'cowrie.session.file_download':
-            # TODO: RENABLE file upload to virustotal (git commit 6546f1ee)
-            log.msg("Checking scan report at VT")
-            self.scanurl(entry)
-            self.scanfile(entry)
+        if entry['eventid'] == 'cowrie.session.file_download':
+            if self.scan_url and 'url' in entry:
+                log.msg("Checking url scan report at VT")
+                self.scanurl(entry)
+            if self._is_new_shasum(entry['shasum']) and self.scan_file:
+                log.msg("Checking file scan report at VT")
+                self.scanfile(entry)
 
-        elif entry["eventid"] == 'cowrie.session.file_upload':
-            log.msg("Checking scan report at VT")
-            self.scanfile(entry)
+        elif entry['eventid'] == 'cowrie.session.file_upload':
+            if self._is_new_shasum(entry['shasum']) and self.scan_file:
+                log.msg("Checking file scan report at VT")
+                self.scanfile(entry)
+
+    def _is_new_shasum(self, shasum):
+        # Get the downloaded file's modification time
+        shasumfile = os.path.join(CowrieConfig().get('honeypot', 'download_path'), shasum)
+        file_modification_time = datetime.datetime.fromtimestamp(os.stat(shasumfile).st_mtime)
+
+        # Assumptions:
+        # 1. A downloaded file that was already downloaded before is not written instead of the first downloaded file
+        # 2. On that stage of the code, the file that needs to be scanned in VT is supposed to be downloaded already
+        #
+        # Check:
+        # If the file was first downloaded more than a "period of time" (e.g 1 min) ago -
+        # it has been apparently scanned before in VT and therefore is not going to be checked again
+        if file_modification_time < datetime.datetime.now()-TIME_SINCE_FIRST_DOWNLOAD:
+            log.msg("File with shasum '%s' was downloaded before" % (shasum, ))
+            return False
+        return True
 
     def scanfile(self, entry):
         """
@@ -98,7 +121,7 @@ class Output(cowrie.core.output.Output):
         """
         vtUrl = '{0}file/report'.format(VTAPI_URL).encode('utf8')
         headers = http_headers.Headers({'User-Agent': [COWRIE_USER_AGENT]})
-        fields = {'apikey': self.apiKey, 'resource': entry["shasum"]}
+        fields = {'apikey': self.apiKey, 'resource': entry['shasum'], 'allinfo': 1}
         body = StringProducer(urlencode(fields).encode("utf-8"))
         d = self.agent.request(b'POST', vtUrl, headers, body)
 
@@ -134,56 +157,57 @@ class Output(cowrie.core.output.Output):
             """
             Extract the information we need from the body
             """
-            result = result.decode('utf8')
-            j = json.loads(result)
             if self.debug:
                 log.msg("VT scanfile result: {}".format(result))
-            log.msg("VT: {}".format(j["verbose_msg"]))
-            if j["response_code"] == 0:
+            result = result.decode('utf8')
+            j = json.loads(result)
+            log.msg("VT: {}".format(j['verbose_msg']))
+            if j['response_code'] == 0:
                 log.msg(eventid='cowrie.virustotal.scanfile',
-                        format='VT: New file %(sha256)s',
+                        format="VT: New file %(sha256)s",
                         session=entry['session'],
-                        sha256=j["sha256"],
+                        sha256=j['resource'],
                         is_new="true")
-                p = urlparse(entry["url"]).path
-                if p == "":
-                    fileName = entry["shasum"]
-                else:
-                    b = os.path.basename(p)
+
+                try:
+                    b = os.path.basename(urlparse(entry['url']).path)
                     if b == "":
-                        fileName = entry["shasum"]
+                        fileName = entry['shasum']
                     else:
                         fileName = b
+                except KeyError:
+                    fileName = entry['shasum']
+
                 if self.upload is True:
-                    return self.postfile(entry["outfile"], fileName)
+                    return self.postfile(entry['outfile'], fileName)
                 else:
                     return
-            elif j["response_code"] == 1:
+            elif j['response_code'] == 1:
                 log.msg("VT: response=1: this has been scanned before")
                 # Add detailed report to json log
                 scans_summary = {}
-                for feed, info in j["scans"].items():
+                for feed, info in j['scans'].items():
                     feed_key = feed.lower()
                     scans_summary[feed_key] = {}
-                    scans_summary[feed_key]["detected"] = str(info["detected"]).lower()
-                    scans_summary[feed_key]["result"] = str(info["result"]).lower()
+                    scans_summary[feed_key]['detected'] = str(info['detected']).lower()
+                    scans_summary[feed_key]['result'] = str(info['result']).lower()
                 log.msg(
                             eventid='cowrie.virustotal.scanfile',
-                            format='VT: Binary file with sha256 %(sha256)s was found malicious '
-                                   'by %(positives)s out of %(total)s feeds (scanned on %(scan_date)s)',
+                            format="VT: Binary file with sha256 %(sha256)s was found malicious "
+                                   "by %(positives)s out of %(total)s feeds (scanned on %(scan_date)s)",
                             session=entry['session'],
-                            positives=j["positives"],
-                            total=j["total"],
-                            scan_date=j["scan_date"],
-                            sha256=j["sha256"],
+                            positives=j['positives'],
+                            total=j['total'],
+                            scan_date=j['scan_date'],
+                            sha256=j['resource'],
                             scans=scans_summary,
                             is_new="false",
                     )
-                log.msg("VT: permalink: {}".format(j["permalink"]))
-            elif j["response_code"] == -2:
+                log.msg("VT: permalink: {}".format(j['permalink']))
+            elif j['response_code'] == -2:
                 log.msg("VT: response=-2: this has been queued for analysis already")
             else:
-                log.msg("VT: unexpected response code".format(j["response_code"]))
+                log.msg("VT: unexpected response code".format(j['response_code']))
 
         d.addCallback(cbResponse)
         d.addErrback(cbError)
@@ -233,12 +257,13 @@ class Output(cowrie.core.output.Output):
         def processResult(result):
             if self.debug:
                 log.msg("VT postfile result: {}".format(result))
+            result = result.decode('utf8')
             j = json.loads(result)
             # This is always a new resource, since we did the scan before
             # so always create the comment
             log.msg("response=0: posting comment")
             if self.comment is True:
-                return self.postcomment(j["resource"])
+                return self.postcomment(j['resource'])
             else:
                 return
 
@@ -252,7 +277,7 @@ class Output(cowrie.core.output.Output):
         """
         vtUrl = '{0}url/report'.format(VTAPI_URL).encode('utf8')
         headers = http_headers.Headers({'User-Agent': [COWRIE_USER_AGENT]})
-        fields = {'apikey': self.apiKey, 'resource': entry['url'], 'scan': 1}
+        fields = {'apikey': self.apiKey, 'resource': entry['url'], 'scan': 1, 'allinfo': 1}
         body = StringProducer(urlencode(fields).encode("utf-8"))
         d = self.agent.request(b'POST', vtUrl, headers, body)
 
@@ -288,32 +313,34 @@ class Output(cowrie.core.output.Output):
             """
             Extract the information we need from the body
             """
-            result = result.decode('utf8')
-            j = json.loads(result)
             if self.debug:
                 log.msg("VT scanurl result: {}".format(result))
-            log.msg("VT: {}".format(j["verbose_msg"]))
+            result = result.decode('utf8')
+            j = json.loads(result)
+            log.msg("VT: {}".format(j['verbose_msg']))
 
-            if j["response_code"] == 0:
+            if j['response_code'] == 0:
                 log.msg(eventid='cowrie.virustotal.scanurl',
-                        format='VT: New URL %(url)s',
+                        format="VT: New URL %(url)s",
                         session=entry['session'],
                         url=entry['url'],
                         is_new="true")
                 return d
-            elif j["response_code"] == 1:
+            elif j['response_code'] == 1 and 'scans' not in j:
+                log.msg("VT: response=1: this was submitted before but has not yet been scanned.")
+            elif j['response_code'] == 1 and 'scans' in j:
                 log.msg("VT: response=1: this has been scanned before")
                 # Add detailed report to json log
                 scans_summary = {}
-                for feed, info in j["scans"].items():
+                for feed, info in j['scans'].items():
                     feed_key = feed.lower()
                     scans_summary[feed_key] = {}
-                    scans_summary[feed_key]["detected"] = str(info["detected"]).lower()
-                    scans_summary[feed_key]["result"] = str(info["result"]).lower()
+                    scans_summary[feed_key]['detected'] = str(info['detected']).lower()
+                    scans_summary[feed_key]['result'] = str(info['result']).lower()
                 log.msg(
                             eventid='cowrie.virustotal.scanurl',
-                            format='VT: URL %(url)s was found malicious by '
-                                   '%(positives)s out of %(total)s feeds (scanned on %(scan_date)s)',
+                            format="VT: URL %(url)s was found malicious by "
+                                   "%(positives)s out of %(total)s feeds (scanned on %(scan_date)s)",
                             session=entry['session'],
                             positives=j['positives'],
                             total=j['total'],
@@ -322,12 +349,12 @@ class Output(cowrie.core.output.Output):
                             scans=scans_summary,
                             is_new="false",
                     )
-                log.msg("VT: permalink: {}".format(j["permalink"]))
-            elif j["response_code"] == -2:
+                log.msg("VT: permalink: {}".format(j['permalink']))
+            elif j['response_code'] == -2:
                 log.msg("VT: response=1: this has been queued for analysis already")
-                log.msg("VT: permalink: {}".format(j["permalink"]))
+                log.msg("VT: permalink: {}".format(j['permalink']))
             else:
-                log.msg("VT: unexpected response code".format(j["response_code"]))
+                log.msg("VT: unexpected response code".format(j['response_code']))
 
         d.addCallback(cbResponse)
         d.addErrback(cbError)
@@ -372,8 +399,9 @@ class Output(cowrie.core.output.Output):
         def processResult(result):
             if self.debug:
                 log.msg("VT postcomment result: {}".format(result))
+            result = result.decode('utf8')
             j = json.loads(result)
-            return j["response_code"]
+            return j['response_code']
 
         d.addCallback(cbResponse)
         d.addErrback(cbError)

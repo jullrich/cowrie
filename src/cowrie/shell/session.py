@@ -43,6 +43,9 @@ class SSHSessionForCowrieUser(object):
 
         self.server.initFileSystem()
 
+        if self.avatar.temporary:
+            self.server.fs.mkdir(self.avatar.home, self.uid, self.gid, 4096, 755)
+
     def openShell(self, processprotocol):
         self.protocol = insults.LoggingServerProtocol(
             protocol.HoneyPotInteractiveProtocol, self)
@@ -50,11 +53,11 @@ class SSHSessionForCowrieUser(object):
         processprotocol.makeConnection(session.wrapProtocol(self.protocol))
 
     def getPty(self, terminal, windowSize, attrs):
-        self.environ['TERM'] = terminal
+        self.environ['TERM'] = terminal.decode("utf-8")
         log.msg(
             eventid='cowrie.client.size',
-            width=windowSize[0],
-            height=windowSize[1],
+            width=windowSize[1],
+            height=windowSize[0],
             format='Terminal Size: %(width)s %(height)s'
         )
         self.windowSize = windowSize
