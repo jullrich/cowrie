@@ -33,8 +33,8 @@ class ReconnectingConnectionPool(adbapi.ConnectionPool):
                 self, interaction, *args, **kw)
         except MySQLdb.OperationalError as e:
             if e[0] not in (2003, 2006, 2013):
-                log.msg("RCP: got error {0}, retrying operation".format(e))
                 raise e
+            log.msg("RCP: got error {0}, retrying operation".format(e))
             conn = self.connections.get(self.threadID())
             self.disconnect(conn)
             # Try the interaction again
@@ -62,6 +62,7 @@ class Output(cowrie.core.output.Output):
                 cp_min=1,
                 cp_max=1,
                 charset='utf8mb4',
+                cp_reconnect=True,
                 use_unicode=True
             )
         except MySQLdb.Error as e:
